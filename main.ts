@@ -539,6 +539,7 @@ class FolderDrawingSettingsModal extends Modal {
   constructor(app: App, plugin: ExcaliDashSyncPlugin) {
     super(app);
     this.plugin = plugin;
+    this.folderPath = getActiveFileParentPath(app);
   }
 
   onOpen(): void {
@@ -636,6 +637,10 @@ class FolderDrawingSettingsModal extends Modal {
       : this.app.vault.getAbstractFileByPath(normalized);
     return abstractFile instanceof TFolder ? abstractFile : null;
   }
+}
+
+function getActiveFileParentPath(app: App): string {
+  return app.workspace.getActiveFile()?.parent?.path ?? "";
 }
 
 interface DrawingSettingsUpdate {
