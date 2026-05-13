@@ -8,6 +8,8 @@ import {
   RequestUrlResponse,
   Setting,
   TFile,
+  TFolder,
+  normalizePath as normalizeObsidianPath,
   requestUrl,
 } from "obsidian";
 import { decompressFromBase64 } from "lz-string";
@@ -25,10 +27,6 @@ interface ExcaliDashTarget {
   name: string;
   baseUrl: string;
   apiPathPrefix: string;
-  csrfTokenEndpoint: string;
-  csrfHeaderName: string;
-  csrfTokenPlacement: "header";
-  staticCsrfToken: string;
   authMode: TargetAuthMode;
   apiKey: string;
   username: string;
@@ -116,6 +114,14 @@ export default class ExcaliDashSyncPlugin extends Plugin {
           new DrawingSettingsModal(this.app, this, file).open();
         }
         return true;
+      },
+    });
+
+    this.addCommand({
+      id: "apply-drawing-settings-to-folder",
+      name: "Apply drawing settings to folder",
+      callback: () => {
+        new FolderDrawingSettingsModal(this.app, this).open();
       },
     });
 
@@ -250,6 +256,26 @@ export default class ExcaliDashSyncPlugin extends Plugin {
     const summary = `ExcaliDash sync: ${synced} synced, ${skipped} skipped, ${conflicts.length} conflicts, ${errors.length} errors.`;
     new Notice(details.length > 0 ? `${summary}\n${details}` : summary, details.length > 0 ? 12000 : 5000);
   }
+
+  async applyDrawingSettingsToFolder(folder: TFolder, settings: DrawingSettingsUpdate): Promise<void> {
+    const files = collectExcalidrawFiles(folder);
+    let updated = 0;
+    const errors: string[] = [];
+
+    for (const file of files) {
+      try {
+        await this.app.fileManager.processFrontMatter(file, (frontmatter) => {
+          applyDrawingSettingsFrontmatter(frontmatter, settings);
+        });
+        updated += 1;
+      } catch (error) {
+        errors.push(`${file.path}: ${sanitizeErrorMessage(error)}`);
+      }
+    }
+
+    const summary = `ExcaliDash sync: updated ${updated} drawings in ${folder.path}. ${errors.length} errors.`;
+    new Notice(errors.length > 0 ? `${summary}\n${errors.join("\n")}` : summary, errors.length > 0 ? 12000 : 5000);
+  }
 }
 
 class ExcaliDashSettingTab extends PluginSettingTab {
@@ -364,39 +390,6 @@ class ExcaliDashSettingTab extends PluginSettingTab {
             text.setValue(target.generatedApiKey.length > 0 ? "stored" : "");
           });
       }
-
-      new Setting(containerEl)
-        .setName("CSRF token endpoint")
-        .setDesc("Used only for username/password login and API-key management.")
-        .addText((text) => text
-          .setPlaceholder(DEFAULT_CSRF_ENDPOINT)
-          .setValue(target.csrfTokenEndpoint)
-          .onChange(async (value) => {
-            target.csrfTokenEndpoint = value.trim() || DEFAULT_CSRF_ENDPOINT;
-            await this.plugin.saveSettings();
-          }));
-
-      new Setting(containerEl)
-        .setName("CSRF header name")
-        .setDesc("Header used only for username/password login and API-key management.")
-        .addText((text) => text
-          .setPlaceholder(DEFAULT_CSRF_HEADER)
-          .setValue(target.csrfHeaderName)
-          .onChange(async (value) => {
-            target.csrfHeaderName = value.trim() || DEFAULT_CSRF_HEADER;
-            await this.plugin.saveSettings();
-          }));
-
-      new Setting(containerEl)
-        .setName("Static CSRF token")
-        .setDesc("Optional fallback for login/key-management. Normal API-key sync does not use CSRF.")
-        .addText((text) => text
-          .setPlaceholder("optional token")
-          .setValue(target.staticCsrfToken)
-          .onChange(async (value) => {
-            target.staticCsrfToken = value;
-            await this.plugin.saveSettings();
-          }));
 
       const actionSetting = new Setting(containerEl)
         .addButton((button) => button
@@ -527,22 +520,159 @@ class DrawingSettingsModal extends Modal {
 
   async save(): Promise<void> {
     await this.app.fileManager.processFrontMatter(this.file, (frontmatter) => {
-      if (this.destination.length === 0) {
-        delete frontmatter["excalidash-destination"];
-        delete frontmatter["excalidash-sync"];
-        delete frontmatter["excalidash-collection"];
-        return;
-      }
-
-      frontmatter["excalidash-destination"] = this.destination;
-      frontmatter["excalidash-sync"] = this.direction;
-      if (this.collection.length === 0) {
-        delete frontmatter["excalidash-collection"];
-      } else {
-        frontmatter["excalidash-collection"] = this.collection;
-      }
+      applyDrawingSettingsFrontmatter(frontmatter, {
+        destination: this.destination,
+        direction: this.direction,
+        collection: this.collection,
+      });
     });
   }
+}
+
+class FolderDrawingSettingsModal extends Modal {
+  plugin: ExcaliDashSyncPlugin;
+  folderPath = "";
+  destination = "";
+  collection = "";
+  direction: SyncDirection = DEFAULT_SYNC_DIRECTION;
+
+  constructor(app: App, plugin: ExcaliDashSyncPlugin) {
+    super(app);
+    this.plugin = plugin;
+  }
+
+  onOpen(): void {
+    const { contentEl } = this;
+    contentEl.empty();
+    new Setting(contentEl).setName("Apply drawing settings to folder").setHeading();
+
+    const folders = this.app.vault.getAllLoadedFiles()
+      .filter((file): file is TFolder => file instanceof TFolder)
+      .sort((left, right) => left.path.localeCompare(right.path));
+
+    new Setting(contentEl)
+      .setName("Folder")
+      .setDesc("Apply settings to Excalidraw files directly inside or under this folder.")
+      .addText((text) => text
+        .setPlaceholder("path/to/folder")
+        .setValue(this.folderPath)
+        .onChange((value) => {
+          this.folderPath = value.trim();
+        }))
+      .addDropdown((dropdown) => {
+        dropdown.addOption("", "Choose folder");
+        for (const folder of folders) {
+          dropdown.addOption(folder.path, folder.path);
+        }
+        dropdown.setValue(this.folderPath);
+        dropdown.onChange((value) => {
+          this.folderPath = value;
+          this.onOpen();
+        });
+      });
+
+    new Setting(contentEl)
+      .setName("Destination")
+      .setDesc("Target name. Leave blank to opt matching drawings out of sync.")
+      .addDropdown((dropdown) => {
+        dropdown.addOption("", "Do not sync");
+        for (const target of this.plugin.settings.targets) {
+          dropdown.addOption(target.name, target.name);
+        }
+        dropdown.setValue(this.destination);
+        dropdown.onChange((value) => {
+          this.destination = value;
+        });
+      });
+
+    new Setting(contentEl)
+      .setName("Sync direction")
+      .setDesc("Bidirectional only pulls remote changes when the local drawing has not changed.")
+      .addDropdown((dropdown) => dropdown
+        .addOption("obsidian-to-excalidash", "Obsidian to ExcaliDash")
+        .addOption("bidirectional", "Bidirectional")
+        .setValue(this.direction)
+        .onChange((value) => {
+          this.direction = value === "bidirectional" ? "bidirectional" : "obsidian-to-excalidash";
+        }));
+
+    new Setting(contentEl)
+      .setName("Collection")
+      .setDesc("Optional ExcaliDash collection id, name, or title. Leave blank for no collection.")
+      .addText((text) => text
+        .setPlaceholder("optional collection")
+        .setValue(this.collection)
+        .onChange((value) => {
+          this.collection = value.trim();
+        }));
+
+    new Setting(contentEl)
+      .addButton((button) => button
+        .setButtonText("Apply")
+        .setCta()
+        .onClick(async () => {
+          const folder = this.getFolder();
+          if (folder === null) {
+            new Notice("ExcaliDash sync: choose an existing folder.");
+            return;
+          }
+
+          await this.plugin.applyDrawingSettingsToFolder(folder, {
+            destination: this.destination,
+            direction: this.direction,
+            collection: this.collection,
+          });
+          this.close();
+        }))
+      .addButton((button) => button
+        .setButtonText("Cancel")
+        .onClick(() => this.close()));
+  }
+
+  getFolder(): TFolder | null {
+    const normalized = normalizeObsidianPath(this.folderPath);
+    const abstractFile = normalized.length === 0 || normalized === "/"
+      ? this.app.vault.getRoot()
+      : this.app.vault.getAbstractFileByPath(normalized);
+    return abstractFile instanceof TFolder ? abstractFile : null;
+  }
+}
+
+interface DrawingSettingsUpdate {
+  destination: string;
+  direction: SyncDirection;
+  collection: string;
+}
+
+function applyDrawingSettingsFrontmatter(frontmatter: Record<string, unknown>, settings: DrawingSettingsUpdate): void {
+  if (settings.destination.length === 0) {
+    delete frontmatter["excalidash-destination"];
+    delete frontmatter["excalidash-sync"];
+    delete frontmatter["excalidash-collection"];
+    return;
+  }
+
+  frontmatter["excalidash-destination"] = settings.destination;
+  frontmatter["excalidash-sync"] = settings.direction;
+  if (settings.collection.length === 0) {
+    delete frontmatter["excalidash-collection"];
+  } else {
+    frontmatter["excalidash-collection"] = settings.collection;
+  }
+}
+
+function collectExcalidrawFiles(folder: TFolder): TFile[] {
+  const files: TFile[] = [];
+
+  for (const child of folder.children) {
+    if (child instanceof TFile && isExcalidrawFile(child)) {
+      files.push(child);
+    } else if (child instanceof TFolder) {
+      files.push(...collectExcalidrawFiles(child));
+    }
+  }
+
+  return files;
 }
 
 interface ParsedScene {
@@ -801,7 +931,7 @@ async function generateApiKeyFromLogin(target: ExcaliDashTarget): Promise<string
       Accept: "application/json",
       "Content-Type": "application/json",
       Cookie: session.cookieHeader,
-      [csrf.header]: csrf.token,
+      [DEFAULT_CSRF_HEADER]: csrf.token,
     },
     body: JSON.stringify({ name: GENERATED_API_KEY_NAME }),
     throw: false,
@@ -829,7 +959,7 @@ async function loginWithPassword(target: ExcaliDashTarget): Promise<TemporarySes
       Accept: "application/json",
       "Content-Type": "application/json",
       ...(csrf.cookieHeader.length > 0 ? { Cookie: csrf.cookieHeader } : {}),
-      [csrf.header]: csrf.token,
+      [DEFAULT_CSRF_HEADER]: csrf.token,
     },
     body: JSON.stringify({ username: target.username, password: target.password }),
     throw: false,
@@ -859,27 +989,22 @@ async function findExistingApiKey(target: ExcaliDashTarget, session: TemporarySe
   return extractNamedApiKey(json, GENERATED_API_KEY_NAME);
 }
 
-async function getCsrfToken(target: ExcaliDashTarget, cookieHeader = ""): Promise<{ header: string; token: string; cookieHeader: string }> {
-  if (target.staticCsrfToken.length > 0) {
-    return { header: target.csrfHeaderName, token: target.staticCsrfToken, cookieHeader };
-  }
-
+async function getCsrfToken(target: ExcaliDashTarget, cookieHeader = ""): Promise<{ token: string; cookieHeader: string }> {
   const headers: Record<string, string> = { Accept: "application/json" };
   if (cookieHeader.length > 0) {
     headers.Cookie = cookieHeader;
   }
 
   const response = await requestUrl({
-    url: buildApiUrl(target, target.csrfTokenEndpoint),
+    url: buildApiUrl(target, DEFAULT_CSRF_ENDPOINT),
     method: "GET",
     headers,
     throw: false,
   });
 
-  const json = parseJsonResponse<Partial<{ token: string; header: string }>>(response, target, target.csrfTokenEndpoint, "CSRF token request");
+  const json = parseJsonResponse<Partial<{ token: string; header: string }>>(response, target, DEFAULT_CSRF_ENDPOINT, "CSRF token request");
   const session = mergeSessionCookies({ cookieHeader }, response);
   return {
-    header: typeof json.header === "string" && json.header.length > 0 ? json.header : target.csrfHeaderName,
     token: typeof json.token === "string" ? json.token : "",
     cookieHeader: session.cookieHeader,
   };
@@ -1095,10 +1220,6 @@ function normalizeTarget(target: Partial<ExcaliDashTarget>): ExcaliDashTarget {
     name: target.name ?? "",
     baseUrl: target.baseUrl ?? "",
     apiPathPrefix: normalizePathPrefix(target.apiPathPrefix ?? DEFAULT_API_PATH_PREFIX),
-    csrfTokenEndpoint: target.csrfTokenEndpoint ?? DEFAULT_CSRF_ENDPOINT,
-    csrfHeaderName: target.csrfHeaderName ?? DEFAULT_CSRF_HEADER,
-    csrfTokenPlacement: "header",
-    staticCsrfToken: target.staticCsrfToken ?? "",
     authMode: target.authMode === "username-password" ? "username-password" : "api-key",
     apiKey: target.apiKey ?? "",
     username: target.username ?? "",
