@@ -9,7 +9,7 @@ Sync selected Obsidian Excalidraw notes to ExcaliDash by using frontmatter opt-i
 - Default direction is Obsidian → ExcaliDash. Set `excalidash-sync: bidirectional` to allow remote changes to flow back when the local drawing has not changed since the last sync. The parser also accepts the legacy typo `bydirectional`.
 - Use the **Perform sync** command to sync all eligible drawings.
 - Use **Edit current drawing settings** to edit sync frontmatter for the active drawing.
-- Supports plain `.excalidraw` JSON and `.excalidraw.md` notes with YAML frontmatter plus fenced or embedded Excalidraw JSON.
+- Supports plain `.excalidraw` JSON and `.excalidraw.md` notes with YAML frontmatter plus fenced, embedded, or `compressed-json` Excalidraw data for Obsidian-to-ExcaliDash upload/sync.
 
 ## Install with BRAT
 
@@ -64,3 +64,4 @@ Write calls send the CSRF token in the configured header, defaulting to `x-csrf-
 - A remote version change since the last sync is reported as a conflict for one-way sync.
 - Bidirectional sync pulls the remote scene into Obsidian only when the local scene hash still matches `excalidash-last-hash`.
 - If both local and remote changed, the plugin reports a conflict and leaves both copies untouched.
+- Bidirectional remote pulls into `compressed-json` Excalidraw notes are not supported; convert the note to plain JSON or use Obsidian-to-ExcaliDash sync for those files.

@@ -10,6 +10,7 @@ import {
   TFile,
   requestUrl,
 } from "obsidian";
+import { decompressFromBase64 } from "lz-string";
 
 const DEFAULT_API_PATH_PREFIX = "/api";
 const DEFAULT_CSRF_ENDPOINT = "/csrf-token";
@@ -203,6 +204,10 @@ export default class ExcaliDashSyncPlugin extends Plugin {
     parsed: ParsedScene,
     remote: ExcalidrawScene,
   ): Promise<void> {
+    if (parsed.sourceFormat === "compressed-json") {
+      throw new Error("Bidirectional pull into compressed-json Excalidraw notes is not supported. Switch this drawing to Obsidian-to-ExcaliDash sync or convert the note to plain JSON before pulling remote changes.");
+    }
+
     const replacement = JSON.stringify({ ...parsed.sceneDocument, ...remote }, null, 2);
     const nextContent = parsed.jsonStart === 0 && parsed.jsonEnd === raw.length
       ? replacement
@@ -439,21 +444,31 @@ interface ParsedScene {
   sceneDocument: Record<string, unknown>;
   jsonStart: number;
   jsonEnd: number;
+  sourceFormat: "json" | "compressed-json";
+}
+
+interface SceneCandidate {
+  text: string;
+  start: number;
+  end: number;
+  format: "json" | "compressed-json";
 }
 
 function parseExcalidrawScene(raw: string, markdown: boolean): ParsedScene | null {
   const withoutFrontmatter = markdown ? stripYamlFrontmatter(raw) : { content: raw, offset: 0 };
-  const candidates = markdown ? findJsonCandidates(withoutFrontmatter.content, withoutFrontmatter.offset) : [{ text: raw, start: 0, end: raw.length }];
+  const candidates = markdown ? findJsonCandidates(withoutFrontmatter.content, withoutFrontmatter.offset) : [{ text: raw, start: 0, end: raw.length, format: "json" as const }];
 
   for (const candidate of candidates) {
     try {
-      const parsed = JSON.parse(candidate.text) as unknown;
+      const json = candidate.format === "compressed-json" ? decompressCompressedJson(candidate.text) : candidate.text;
+      const parsed = JSON.parse(json) as unknown;
       if (isSceneDocument(parsed)) {
         return {
           scene: toScene(parsed),
           sceneDocument: parsed,
           jsonStart: candidate.start,
           jsonEnd: candidate.end,
+          sourceFormat: candidate.format,
         };
       }
     } catch {
@@ -479,15 +494,21 @@ function stripYamlFrontmatter(raw: string): { content: string; offset: number } 
   return { content: raw.slice(offset), offset };
 }
 
-function findJsonCandidates(content: string, offset: number): { text: string; start: number; end: number }[] {
-  const candidates: { text: string; start: number; end: number }[] = [];
-  const fenceRegex = /```(?:json|excalidraw)?\s*\n([\s\S]*?)\n```/gi;
+function findJsonCandidates(content: string, offset: number): SceneCandidate[] {
+  const candidates: SceneCandidate[] = [];
+  const fenceRegex = /```([^\n`]*)\n([\s\S]*?)\n```/gi;
   let match: RegExpExecArray | null;
 
   while ((match = fenceRegex.exec(content)) !== null) {
-    const text = match[1] ?? "";
+    const fenceType = (match[1] ?? "").trim().toLowerCase();
+    const format = fenceType === "compressed-json" ? "compressed-json" : fenceType === "" || fenceType === "json" || fenceType === "excalidraw" ? "json" : null;
+    if (format === null) {
+      continue;
+    }
+
+    const text = match[2] ?? "";
     const relativeStart = match.index + match[0].indexOf(text);
-    candidates.push({ text: text.trim(), start: offset + relativeStart, end: offset + relativeStart + text.length });
+    candidates.push({ text: text.trim(), start: offset + relativeStart, end: offset + relativeStart + text.length, format });
   }
 
   const firstBrace = content.indexOf("{");
@@ -497,10 +518,20 @@ function findJsonCandidates(content: string, offset: number): { text: string; st
       text: content.slice(firstBrace, lastBrace + 1),
       start: offset + firstBrace,
       end: offset + lastBrace + 1,
+      format: "json",
     });
   }
 
   return candidates;
+}
+
+function decompressCompressedJson(text: string): string {
+  const decompressed = decompressFromBase64(text.replace(/\s+/g, ""));
+  if (decompressed.length === 0) {
+    throw new Error("Unable to decompress Excalidraw compressed-json block.");
+  }
+
+  return decompressed;
 }
 
 function isSceneDocument(value: unknown): value is Record<string, unknown> {
