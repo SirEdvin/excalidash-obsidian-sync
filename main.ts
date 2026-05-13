@@ -232,11 +232,11 @@ class ExcaliDashSettingTab extends PluginSettingTab {
   display(): void {
     const { containerEl } = this;
     containerEl.empty();
-    containerEl.createEl("h2", { text: "ExcaliDash sync targets" });
+    new Setting(containerEl).setName("ExcaliDash sync targets").setHeading();
 
     this.plugin.settings.targets.forEach((target, index) => {
       const heading = target.name.trim().length > 0 ? target.name : `Target ${index + 1}`;
-      containerEl.createEl("h3", { text: heading });
+      new Setting(containerEl).setName(heading).setHeading();
 
       new Setting(containerEl)
         .setName("Name")
@@ -345,7 +345,7 @@ class DrawingSettingsModal extends Modal {
   onOpen(): void {
     const { contentEl } = this;
     contentEl.empty();
-    contentEl.createEl("h2", { text: "ExcaliDash drawing settings" });
+    new Setting(contentEl).setName("ExcaliDash drawing settings").setHeading();
 
     new Setting(contentEl)
       .setName("Destination")
@@ -589,7 +589,8 @@ function joinUrl(baseUrl: string, path: string): string {
 }
 
 function parseDrawingFrontmatter(frontmatter: Record<string, unknown> | undefined): DrawingFrontmatter {
-  const direction = frontmatter?.["excalidash-sync"] === "bidirectional" ? "bidirectional" : DEFAULT_SYNC_DIRECTION;
+  const syncValue = frontmatter?.["excalidash-sync"];
+  const direction = syncValue === "bidirectional" || syncValue === "bydirectional" ? "bidirectional" : DEFAULT_SYNC_DIRECTION;
   const version = frontmatter?.["excalidash-version"];
 
   return {
