@@ -4,7 +4,7 @@ Sync selected Obsidian Excalidraw notes to ExcaliDash by using frontmatter opt-i
 
 ## MVP behavior
 
-- Configure one or more ExcaliDash targets in plugin settings.
+- Configure one or more ExcaliDash targets in plugin settings. Each target includes a **Test connection** button to verify its URL, auth cookie, and CSRF configuration.
 - Drawings are ignored unless their note frontmatter contains `excalidash-destination` matching a configured target name.
 - Default direction is Obsidian → ExcaliDash. Set `excalidash-sync: bidirectional` to allow remote changes to flow back when the local drawing has not changed since the last sync. The parser also accepts the legacy typo `bydirectional`.
 - Use the **Perform sync** command to sync all eligible drawings.

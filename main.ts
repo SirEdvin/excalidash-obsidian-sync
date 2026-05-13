@@ -59,6 +59,10 @@ interface SyncResult {
   message: string;
 }
 
+interface ConnectionTestResult {
+  drawingCount?: number;
+}
+
 const DEFAULT_SETTINGS: ExcaliDashSyncSettings = {
   targets: [],
 };
@@ -306,6 +310,23 @@ class ExcaliDashSettingTab extends PluginSettingTab {
 
       new Setting(containerEl)
         .addButton((button) => button
+          .setButtonText("Test connection")
+          .onClick(async () => {
+            await this.plugin.saveSettings();
+            if (target.baseUrl.trim().length === 0) {
+              new Notice(`ExcaliDash connection test failed for ${formatTargetName(target, index)}: base URL is required.`);
+              return;
+            }
+
+            try {
+              const result = await testExcaliDashConnection(target);
+              const suffix = result.drawingCount === undefined ? "" : ` Found ${result.drawingCount} drawings.`;
+              new Notice(`ExcaliDash connection test succeeded for ${formatTargetName(target, index)}.${suffix}`);
+            } catch (error) {
+              new Notice(`ExcaliDash connection test failed for ${formatTargetName(target, index)}: ${sanitizeErrorMessage(error)}`, 10000);
+            }
+          }))
+        .addButton((button) => button
           .setButtonText("Remove target")
           .setWarning()
           .onClick(async () => {
@@ -523,17 +544,39 @@ async function updateRemoteDrawing(
   });
 }
 
-async function requestJson<T>(target: ExcaliDashTarget, method: string, path: string, body?: unknown): Promise<T> {
+async function testExcaliDashConnection(target: ExcaliDashTarget): Promise<ConnectionTestResult> {
+  const csrf = await getCsrfToken(target);
+  if (target.staticCsrfToken.length === 0) {
+    if (csrf.token.length === 0) {
+      throw new Error("CSRF token response did not include a token.");
+    }
+  }
+
+  const drawings = await requestJson<unknown>(target, "GET", "/drawings?includeData=false", undefined, csrf);
+  return { drawingCount: Array.isArray(drawings) ? drawings.length : undefined };
+}
+
+async function requestJson<T>(
+  target: ExcaliDashTarget,
+  method: string,
+  path: string,
+  body?: unknown,
+  csrf?: { header: string; token: string },
+): Promise<T> {
   const headers: Record<string, string> = { Accept: "application/json" };
   if (target.cookieHeader.length > 0) {
     headers.Cookie = target.cookieHeader;
   }
 
+  if (csrf !== undefined && csrf.token.length > 0) {
+    headers[csrf.header] = csrf.token;
+  }
+
   if (body !== undefined) {
     headers["Content-Type"] = "application/json";
-    const csrf = await getCsrfToken(target);
-    if (csrf.token.length > 0) {
-      headers[csrf.header] = csrf.token;
+    const writeCsrf = csrf ?? await getCsrfToken(target);
+    if (writeCsrf.token.length > 0) {
+      headers[writeCsrf.header] = writeCsrf.token;
     }
   }
 
@@ -586,6 +629,18 @@ async function getCsrfToken(target: ExcaliDashTarget): Promise<{ header: string;
 
 function joinUrl(baseUrl: string, path: string): string {
   return `${baseUrl.replace(/\/+$/, "")}/${path.replace(/^\/+/, "")}`;
+}
+
+function formatTargetName(target: ExcaliDashTarget, index: number): string {
+  return target.name.trim().length > 0 ? target.name.trim() : `Target ${index + 1}`;
+}
+
+function sanitizeErrorMessage(error: unknown): string {
+  const message = error instanceof Error ? error.message : String(error);
+  return message
+    .replace(/(cookie\s*[:=]\s*)[^\n,;]+/gi, "$1[redacted]")
+    .replace(/(csrf[-_\s]*(?:token)?\s*[:=]\s*)[^\n,;]+/gi, "$1[redacted]")
+    .replace(/(x-csrf-token\s*[:=]\s*)[^\n,;]+/gi, "$1[redacted]");
 }
 
 function parseDrawingFrontmatter(frontmatter: Record<string, unknown> | undefined): DrawingFrontmatter {
