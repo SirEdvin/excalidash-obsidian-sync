@@ -11,6 +11,25 @@ Sync selected Obsidian Excalidraw notes to ExcaliDash by using frontmatter opt-i
 - Use **Edit current drawing settings** to edit sync frontmatter for the active drawing.
 - Supports plain `.excalidraw` JSON and `.excalidraw.md` notes with YAML frontmatter plus fenced or embedded Excalidraw JSON.
 
+## Install with BRAT
+
+This plugin is not in the community plugin directory yet, so install it with [BRAT](https://community.obsidian.md/plugins/obsidian42-brat):
+
+1. In Obsidian, open **Settings → Community plugins** and turn off **Restricted mode** if needed.
+2. Install and enable **BRAT** from the community plugin browser.
+3. Open **Settings → BRAT**.
+4. Choose **Add beta plugin**.
+5. Paste this repository URL:
+
+   ```text
+   https://github.com/SirEdvin/excalidash-obsidian-sync
+   ```
+
+6. Confirm the install, then enable **ExcaliDash sync** in **Settings → Community plugins**.
+7. Open **Settings → ExcaliDash sync** and add at least one ExcaliDash target before running sync.
+
+BRAT will track updates from this repository. If a release is available, use the latest release; otherwise use the default branch build.
+
 ## Frontmatter
 
 ```yaml
