@@ -5,11 +5,13 @@ import {
   Plugin,
   PluginSettingTab,
   RequestUrlParam,
+  RequestUrlResponse,
   Setting,
   TFile,
   requestUrl,
 } from "obsidian";
 
+const DEFAULT_API_PATH_PREFIX = "/api";
 const DEFAULT_CSRF_ENDPOINT = "/csrf-token";
 const DEFAULT_CSRF_HEADER = "x-csrf-token";
 const DEFAULT_SYNC_DIRECTION: SyncDirection = "obsidian-to-excalidash";
@@ -19,6 +21,7 @@ type SyncDirection = "obsidian-to-excalidash" | "bidirectional";
 interface ExcaliDashTarget {
   name: string;
   baseUrl: string;
+  apiPathPrefix: string;
   csrfTokenEndpoint: string;
   csrfHeaderName: string;
   csrfTokenPlacement: "header";
@@ -261,6 +264,17 @@ class ExcaliDashSettingTab extends PluginSettingTab {
           .setValue(target.baseUrl)
           .onChange(async (value) => {
             target.baseUrl = value.trim();
+            await this.plugin.saveSettings();
+          }));
+
+      new Setting(containerEl)
+        .setName("API path prefix")
+        .setDesc("Path prefix for ExcaliDash API routes. Use /api for https://exdh.siredvin.site.")
+        .addText((text) => text
+          .setPlaceholder(DEFAULT_API_PATH_PREFIX)
+          .setValue(target.apiPathPrefix)
+          .onChange(async (value) => {
+            target.apiPathPrefix = normalizePathPrefix(value.trim());
             await this.plugin.saveSettings();
           }));
 
@@ -581,7 +595,7 @@ async function requestJson<T>(
   }
 
   const params: RequestUrlParam = {
-    url: joinUrl(target.baseUrl, path),
+    url: buildApiUrl(target, path),
     method,
     headers,
     throw: false,
@@ -592,11 +606,7 @@ async function requestJson<T>(
   }
 
   const response = await requestUrl(params);
-  if (response.status < 200 || response.status >= 300) {
-    throw new Error(`ExcaliDash request failed with HTTP ${response.status}: ${response.text}`);
-  }
-
-  return response.json as T;
+  return parseJsonResponse<T>(response, target, path, "ExcaliDash request");
 }
 
 async function getCsrfToken(target: ExcaliDashTarget): Promise<{ header: string; token: string }> {
@@ -610,25 +620,102 @@ async function getCsrfToken(target: ExcaliDashTarget): Promise<{ header: string;
   }
 
   const response = await requestUrl({
-    url: joinUrl(target.baseUrl, target.csrfTokenEndpoint),
+    url: buildApiUrl(target, target.csrfTokenEndpoint),
     method: "GET",
     headers,
     throw: false,
   });
 
-  if (response.status < 200 || response.status >= 300) {
-    throw new Error(`CSRF token request failed with HTTP ${response.status}: ${response.text}`);
-  }
-
-  const json = response.json as Partial<{ token: string; header: string }>;
+  const json = parseJsonResponse<Partial<{ token: string; header: string }>>(response, target, target.csrfTokenEndpoint, "CSRF token request");
   return {
     header: typeof json.header === "string" && json.header.length > 0 ? json.header : target.csrfHeaderName,
     token: typeof json.token === "string" ? json.token : "",
   };
 }
 
+function parseJsonResponse<T>(
+  response: RequestUrlResponse,
+  target: ExcaliDashTarget,
+  path: string,
+  requestName: string,
+): T {
+  const displayPath = getApiDisplayPath(target, path);
+  const contentType = getHeader(response.headers, "content-type");
+
+  if (!isJsonContentType(contentType)) {
+    const received = contentType.length > 0 ? contentType : "unknown content type";
+    throw new Error(`Expected JSON from ${displayPath} but received ${received}; check API path prefix.`);
+  }
+
+  if (response.status < 200 || response.status >= 300) {
+    throw new Error(`${requestName} to ${displayPath} failed with HTTP ${response.status}.`);
+  }
+
+  try {
+    return JSON.parse(response.text) as T;
+  } catch {
+    throw new Error(`Expected JSON from ${displayPath} but received invalid JSON; check API path prefix.`);
+  }
+}
+
+function getHeader(headers: Record<string, string>, name: string): string {
+  const lowerName = name.toLowerCase();
+  for (const [key, value] of Object.entries(headers)) {
+    if (key.toLowerCase() === lowerName) {
+      return value.split(";", 1)[0]?.trim().toLowerCase() ?? "";
+    }
+  }
+  return "";
+}
+
+function isJsonContentType(contentType: string): boolean {
+  return contentType === "application/json" || contentType.endsWith("+json");
+}
+
+function buildApiUrl(target: ExcaliDashTarget, path: string): string {
+  const apiPathPrefix = normalizePathPrefix(target.apiPathPrefix);
+  if (apiPathPrefix.length === 0 || baseUrlEndsWithPathPrefix(target.baseUrl, apiPathPrefix)) {
+    return joinUrl(target.baseUrl, path);
+  }
+
+  return joinUrl(target.baseUrl, joinPath(apiPathPrefix, path));
+}
+
+function getApiDisplayPath(target: ExcaliDashTarget, path: string): string {
+  const apiPathPrefix = normalizePathPrefix(target.apiPathPrefix);
+  if (apiPathPrefix.length === 0) {
+    return normalizePath(path);
+  }
+
+  return joinPath(apiPathPrefix, path);
+}
+
+function baseUrlEndsWithPathPrefix(baseUrl: string, pathPrefix: string): boolean {
+  try {
+    const parsed = new URL(baseUrl);
+    const pathname = normalizePath(parsed.pathname);
+    return pathname === pathPrefix || pathname.endsWith(pathPrefix);
+  } catch {
+    return normalizePath(baseUrl) === pathPrefix || normalizePath(baseUrl).endsWith(pathPrefix);
+  }
+}
+
 function joinUrl(baseUrl: string, path: string): string {
   return `${baseUrl.replace(/\/+$/, "")}/${path.replace(/^\/+/, "")}`;
+}
+
+function joinPath(prefix: string, path: string): string {
+  return `${normalizePathPrefix(prefix)}${normalizePath(path)}`;
+}
+
+function normalizePath(path: string): string {
+  const trimmed = path.trim();
+  return `/${trimmed.replace(/^\/+/, "")}`;
+}
+
+function normalizePathPrefix(pathPrefix: string): string {
+  const trimmed = pathPrefix.trim().replace(/^\/+|\/+$/g, "");
+  return trimmed.length > 0 ? `/${trimmed}` : "";
 }
 
 function formatTargetName(target: ExcaliDashTarget, index: number): string {
@@ -676,6 +763,7 @@ function normalizeTarget(target: Partial<ExcaliDashTarget>): ExcaliDashTarget {
   return {
     name: target.name ?? "",
     baseUrl: target.baseUrl ?? "",
+    apiPathPrefix: normalizePathPrefix(target.apiPathPrefix ?? DEFAULT_API_PATH_PREFIX),
     csrfTokenEndpoint: target.csrfTokenEndpoint ?? DEFAULT_CSRF_ENDPOINT,
     csrfHeaderName: target.csrfHeaderName ?? DEFAULT_CSRF_HEADER,
     csrfTokenPlacement: "header",

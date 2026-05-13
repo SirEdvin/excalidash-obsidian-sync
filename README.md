@@ -45,10 +45,16 @@ excalidash-last-synced: 2026-05-13T12:00:00.000Z
 
 The plugin uses the internal routes documented in `docs/excalidash-api-notes.md`:
 
-- `GET /csrf-token`
-- `GET /drawings/:id`
-- `POST /drawings`
-- `PUT /drawings/:id`
+- `GET /api/csrf-token`
+- `GET /api/drawings/:id`
+- `POST /api/drawings`
+- `PUT /api/drawings/:id`
+
+For `https://exdh.siredvin.site`, configure the target as:
+
+- Base URL: `https://exdh.siredvin.site`
+- API path prefix: `/api`
+- CSRF token endpoint: `/csrf-token`
 
 Write calls send the CSRF token in the configured header, defaulting to `x-csrf-token`. If your ExcaliDash instance requires auth cookies, place the cookie header in the target configuration.
 
