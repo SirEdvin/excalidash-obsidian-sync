@@ -12,7 +12,7 @@ import {
   normalizePath as normalizeObsidianPath,
   requestUrl,
 } from "obsidian";
-import { decompressFromBase64 } from "lz-string";
+import { compressToBase64, decompressFromBase64 } from "lz-string";
 
 const DEFAULT_API_PATH_PREFIX = "/api";
 const DEFAULT_CSRF_ENDPOINT = "/csrf-token";
@@ -229,11 +229,10 @@ export default class ExcaliDashSyncPlugin extends Plugin {
     parsed: ParsedScene,
     remote: ExcalidrawScene,
   ): Promise<void> {
-    if (parsed.sourceFormat === "compressed-json") {
-      throw new Error("Bidirectional pull into compressed-json Excalidraw notes is not supported. Switch this drawing to Obsidian-to-ExcaliDash sync or convert the note to plain JSON before pulling remote changes.");
-    }
-
-    const replacement = JSON.stringify({ ...parsed.sceneDocument, ...remote }, null, 2);
+    const sceneDocument = { ...parsed.sceneDocument, ...remote };
+    const replacement = parsed.sourceFormat === "compressed-json"
+      ? compressToBase64(JSON.stringify(sceneDocument))
+      : JSON.stringify(sceneDocument, null, 2);
     const nextContent = parsed.jsonStart === 0 && parsed.jsonEnd === raw.length
       ? replacement
       : `${raw.slice(0, parsed.jsonStart)}${replacement}${raw.slice(parsed.jsonEnd)}`;
@@ -540,6 +539,7 @@ class FolderDrawingSettingsModal extends Modal {
     super(app);
     this.plugin = plugin;
     this.folderPath = getActiveFileParentPath(app);
+    this.refreshDefaultsForFolder();
   }
 
   onOpen(): void {
@@ -554,12 +554,19 @@ class FolderDrawingSettingsModal extends Modal {
     new Setting(contentEl)
       .setName("Folder")
       .setDesc("Apply settings to Excalidraw files directly inside or under this folder.")
-      .addText((text) => text
-        .setPlaceholder("path/to/folder")
-        .setValue(this.folderPath)
-        .onChange((value) => {
-          this.folderPath = value.trim();
-        }))
+      .addText((text) => {
+        text
+          .setPlaceholder("path/to/folder")
+          .setValue(this.folderPath)
+          .onChange((value) => {
+            this.folderPath = value.trim();
+          });
+        text.inputEl.addEventListener("change", () => {
+          this.folderPath = text.getValue().trim();
+          this.refreshDefaultsForFolder();
+          this.onOpen();
+        });
+      })
       .addDropdown((dropdown) => {
         dropdown.addOption("", "Choose folder");
         for (const folder of folders) {
@@ -568,6 +575,7 @@ class FolderDrawingSettingsModal extends Modal {
         dropdown.setValue(this.folderPath);
         dropdown.onChange((value) => {
           this.folderPath = value;
+          this.refreshDefaultsForFolder();
           this.onOpen();
         });
       });
@@ -631,11 +639,30 @@ class FolderDrawingSettingsModal extends Modal {
   }
 
   getFolder(): TFolder | null {
-    const normalized = normalizeObsidianPath(this.folderPath);
+    return this.getFolderForPath(this.folderPath);
+  }
+
+  getFolderForPath(folderPath: string): TFolder | null {
+    const normalized = normalizeObsidianPath(folderPath);
     const abstractFile = normalized.length === 0 || normalized === "/"
       ? this.app.vault.getRoot()
       : this.app.vault.getAbstractFileByPath(normalized);
     return abstractFile instanceof TFolder ? abstractFile : null;
+  }
+
+  refreshDefaultsForFolder(): void {
+    const folder = this.getFolderForPath(this.folderPath);
+    if (folder === null) {
+      this.destination = "";
+      this.collection = "";
+      this.direction = DEFAULT_SYNC_DIRECTION;
+      return;
+    }
+
+    const defaults = analyzeFolderDrawingSettings(this.app, folder);
+    this.destination = defaults.destination;
+    this.collection = defaults.collection;
+    this.direction = defaults.direction;
   }
 }
 
@@ -678,6 +705,49 @@ function collectExcalidrawFiles(folder: TFolder): TFile[] {
   }
 
   return files;
+}
+
+function analyzeFolderDrawingSettings(app: App, folder: TFolder): DrawingSettingsUpdate {
+  const destinationCounts = new Map<string, number>();
+  const collectionCounts = new Map<string, number>();
+  const directionCounts = new Map<SyncDirection, number>();
+
+  for (const file of collectExcalidrawFiles(folder)) {
+    const frontmatter = parseDrawingFrontmatter(app.metadataCache.getFileCache(file)?.frontmatter);
+    incrementCount(directionCounts, frontmatter.direction);
+
+    if (frontmatter.destination !== undefined) {
+      incrementCount(destinationCounts, frontmatter.destination);
+    }
+
+    if (frontmatter.collection !== undefined) {
+      incrementCount(collectionCounts, frontmatter.collection);
+    }
+  }
+
+  return {
+    destination: mostFrequentValue(destinationCounts) ?? "",
+    collection: mostFrequentValue(collectionCounts) ?? "",
+    direction: mostFrequentValue(directionCounts) ?? DEFAULT_SYNC_DIRECTION,
+  };
+}
+
+function incrementCount<T>(counts: Map<T, number>, value: T): void {
+  counts.set(value, (counts.get(value) ?? 0) + 1);
+}
+
+function mostFrequentValue<T>(counts: Map<T, number>): T | undefined {
+  let selected: T | undefined;
+  let selectedCount = 0;
+
+  for (const [value, count] of counts) {
+    if (count > selectedCount) {
+      selected = value;
+      selectedCount = count;
+    }
+  }
+
+  return selected;
 }
 
 interface ParsedScene {
