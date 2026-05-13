@@ -1,0 +1,34 @@
+.excalidash-sync-config-card {
+  border: 1px solid var(--background-modifier-border);
+  border-radius: var(--radius-m);
+  padding: var(--size-4-3);
+  margin-block: var(--size-4-3);
+}
+.excalidash-sync-config-actions {
+  display: flex;
+  gap: var(--size-4-2);
+  flex-wrap: wrap;
+  margin-top: var(--size-4-2);
+}
+.excalidash-sync-modal-summary {
+  color: var(--text-muted);
+  margin-bottom: var(--size-4-3);
+}
+.excalidash-sync-results {
+  max-height: 40vh;
+  overflow: auto;
+  border: 1px solid var(--background-modifier-border);
+  border-radius: var(--radius-s);
+  padding: var(--size-4-2);
+}
+.excalidash-sync-results li {
+  margin-block: var(--size-2-1);
+}
+.excalidash-sync-danger {
+  color: var(--text-error);
+}
+.excalidash-sync-config-actions button:focus-visible,
+.excalidash-sync-modal button:focus-visible {
+  outline: 2px solid var(--interactive-accent);
+  outline-offset: 2px;
+}
