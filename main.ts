@@ -16,8 +16,10 @@ const DEFAULT_API_PATH_PREFIX = "/api";
 const DEFAULT_CSRF_ENDPOINT = "/csrf-token";
 const DEFAULT_CSRF_HEADER = "x-csrf-token";
 const DEFAULT_SYNC_DIRECTION: SyncDirection = "obsidian-to-excalidash";
+const GENERATED_API_KEY_NAME = "Obsidian ExcaliDash sync";
 
 type SyncDirection = "obsidian-to-excalidash" | "bidirectional";
+type TargetAuthMode = "api-key" | "username-password";
 
 interface ExcaliDashTarget {
   name: string;
@@ -27,6 +29,14 @@ interface ExcaliDashTarget {
   csrfHeaderName: string;
   csrfTokenPlacement: "header";
   staticCsrfToken: string;
+  authMode: TargetAuthMode;
+  apiKey: string;
+  username: string;
+  password: string;
+  generatedApiKey: string;
+}
+
+interface TemporarySession {
   cookieHeader: string;
 }
 
@@ -293,8 +303,71 @@ class ExcaliDashSettingTab extends PluginSettingTab {
           }));
 
       new Setting(containerEl)
+        .setName("Auth mode")
+        .setDesc("Use an existing personal API key, or generate one by logging in once.")
+        .addDropdown((dropdown) => dropdown
+          .addOption("api-key", "API key")
+          .addOption("username-password", "Username and password")
+          .setValue(target.authMode)
+          .onChange(async (value) => {
+            target.authMode = value === "username-password" ? "username-password" : "api-key";
+            await this.plugin.saveSettings();
+            this.display();
+          }));
+
+      if (target.authMode === "api-key") {
+        new Setting(containerEl)
+          .setName("API key")
+          .setDesc("Personal API key used as an Authorization bearer token for sync requests.")
+          .addText((text) => {
+            text.inputEl.type = "password";
+            text
+              .setPlaceholder("excalidash API key")
+              .setValue(target.apiKey)
+              .onChange(async (value) => {
+                target.apiKey = value.trim();
+                await this.plugin.saveSettings();
+              });
+          });
+      } else {
+        new Setting(containerEl)
+          .setName("Username")
+          .setDesc("Used only to generate or reuse a personal API key.")
+          .addText((text) => text
+            .setPlaceholder("username")
+            .setValue(target.username)
+            .onChange(async (value) => {
+              target.username = value.trim();
+              await this.plugin.saveSettings();
+            }));
+
+        new Setting(containerEl)
+          .setName("Password")
+          .setDesc("Used only during API key generation; normal sync uses the generated API key.")
+          .addText((text) => {
+            text.inputEl.type = "password";
+            text
+              .setPlaceholder("password")
+              .setValue(target.password)
+              .onChange(async (value) => {
+                target.password = value;
+                await this.plugin.saveSettings();
+              });
+          });
+
+        new Setting(containerEl)
+          .setName("Generated API key")
+          .setDesc(target.generatedApiKey.length > 0 ? "A generated key is stored and will be used for sync." : "No generated API key is stored yet.")
+          .addText((text) => {
+            text.inputEl.type = "password";
+            text.inputEl.disabled = true;
+            text.setValue(target.generatedApiKey.length > 0 ? "stored" : "");
+          });
+      }
+
+      new Setting(containerEl)
         .setName("CSRF token endpoint")
-        .setDesc("Used when no static CSRF token is configured.")
+        .setDesc("Used only for username/password login and API-key management.")
         .addText((text) => text
           .setPlaceholder(DEFAULT_CSRF_ENDPOINT)
           .setValue(target.csrfTokenEndpoint)
@@ -305,7 +378,7 @@ class ExcaliDashSettingTab extends PluginSettingTab {
 
       new Setting(containerEl)
         .setName("CSRF header name")
-        .setDesc("Header used for write requests.")
+        .setDesc("Header used only for username/password login and API-key management.")
         .addText((text) => text
           .setPlaceholder(DEFAULT_CSRF_HEADER)
           .setValue(target.csrfHeaderName)
@@ -316,7 +389,7 @@ class ExcaliDashSettingTab extends PluginSettingTab {
 
       new Setting(containerEl)
         .setName("Static CSRF token")
-        .setDesc("Optional. If blank, the plugin requests a token from the endpoint.")
+        .setDesc("Optional fallback for login/key-management. Normal API-key sync does not use CSRF.")
         .addText((text) => text
           .setPlaceholder("optional token")
           .setValue(target.staticCsrfToken)
@@ -325,18 +398,7 @@ class ExcaliDashSettingTab extends PluginSettingTab {
             await this.plugin.saveSettings();
           }));
 
-      new Setting(containerEl)
-        .setName("Cookie header")
-        .setDesc("Optional Cookie header for authenticated ExcaliDash instances.")
-        .addTextArea((text) => text
-          .setPlaceholder("access-token=...; csrf-token=...")
-          .setValue(target.cookieHeader)
-          .onChange(async (value) => {
-            target.cookieHeader = value.trim();
-            await this.plugin.saveSettings();
-          }));
-
-      new Setting(containerEl)
+      const actionSetting = new Setting(containerEl)
         .addButton((button) => button
           .setButtonText("Test connection")
           .onClick(async () => {
@@ -353,8 +415,25 @@ class ExcaliDashSettingTab extends PluginSettingTab {
             } catch (error) {
               new Notice(`ExcaliDash connection test failed for ${formatTargetName(target, index)}: ${sanitizeErrorMessage(error)}`, 10000);
             }
-          }))
-        .addButton((button) => button
+          }));
+
+      if (target.authMode === "username-password") {
+        actionSetting.addButton((button) => button
+          .setButtonText("Generate API key from login")
+          .onClick(async () => {
+            await this.plugin.saveSettings();
+            try {
+              target.generatedApiKey = await generateApiKeyFromLogin(target);
+              await this.plugin.saveSettings();
+              this.display();
+              new Notice(`ExcaliDash API key generated for ${formatTargetName(target, index)}.`);
+            } catch (error) {
+              new Notice(`ExcaliDash API key generation failed for ${formatTargetName(target, index)}: ${sanitizeErrorMessage(error)}`, 10000);
+            }
+          }));
+      }
+
+      actionSetting.addButton((button) => button
           .setButtonText("Remove target")
           .setWarning()
           .onClick(async () => {
@@ -648,14 +727,7 @@ function isExcaliDashCollection(value: unknown): value is ExcaliDashCollection {
 }
 
 async function testExcaliDashConnection(target: ExcaliDashTarget): Promise<ConnectionTestResult> {
-  const csrf = await getCsrfToken(target);
-  if (target.staticCsrfToken.length === 0) {
-    if (csrf.token.length === 0) {
-      throw new Error("CSRF token response did not include a token.");
-    }
-  }
-
-  const drawings = await requestJson<unknown>(target, "GET", "/drawings?includeData=false", undefined, csrf);
+  const drawings = await requestJson<unknown>(target, "GET", "/drawings?includeData=false");
   return { drawingCount: Array.isArray(drawings) ? drawings.length : undefined };
 }
 
@@ -664,23 +736,12 @@ async function requestJson<T>(
   method: string,
   path: string,
   body?: unknown,
-  csrf?: { header: string; token: string },
 ): Promise<T> {
   const headers: Record<string, string> = { Accept: "application/json" };
-  if (target.cookieHeader.length > 0) {
-    headers.Cookie = target.cookieHeader;
-  }
-
-  if (csrf !== undefined && csrf.token.length > 0) {
-    headers[csrf.header] = csrf.token;
-  }
+  headers.Authorization = `Bearer ${getTargetApiKey(target)}`;
 
   if (body !== undefined) {
     headers["Content-Type"] = "application/json";
-    const writeCsrf = csrf ?? await getCsrfToken(target);
-    if (writeCsrf.token.length > 0) {
-      headers[writeCsrf.header] = writeCsrf.token;
-    }
   }
 
   const params: RequestUrlParam = {
@@ -698,14 +759,114 @@ async function requestJson<T>(
   return parseJsonResponse<T>(response, target, path, "ExcaliDash request");
 }
 
-async function getCsrfToken(target: ExcaliDashTarget): Promise<{ header: string; token: string }> {
+function getTargetApiKey(target: ExcaliDashTarget): string {
+  const apiKey = target.authMode === "username-password" ? target.generatedApiKey : target.apiKey;
+  if (apiKey.trim().length === 0) {
+    throw new Error(target.authMode === "username-password"
+      ? "Generated API key is required. Use Generate API key from login before syncing."
+      : "API key is required for this ExcaliDash target.");
+  }
+
+  return apiKey.trim();
+}
+
+async function generateApiKeyFromLogin(target: ExcaliDashTarget): Promise<string> {
+  if (target.generatedApiKey.trim().length > 0) {
+    return target.generatedApiKey.trim();
+  }
+
+  if (target.baseUrl.trim().length === 0) {
+    throw new Error("Base URL is required.");
+  }
+
+  if (target.username.trim().length === 0 || target.password.length === 0) {
+    throw new Error("Username and password are required to generate an API key.");
+  }
+
+  let session = await loginWithPassword(target);
+  const existingKey = await findExistingApiKey(target, session);
+  if (existingKey !== null) {
+    return existingKey;
+  }
+
+  const csrf = await getCsrfToken(target, session.cookieHeader);
+  if (csrf.token.length === 0) {
+    throw new Error("CSRF token response did not include a token for API key creation.");
+  }
+
+  const response = await requestUrl({
+    url: buildApiUrl(target, "/auth/api-keys"),
+    method: "POST",
+    headers: {
+      Accept: "application/json",
+      "Content-Type": "application/json",
+      Cookie: session.cookieHeader,
+      [csrf.header]: csrf.token,
+    },
+    body: JSON.stringify({ name: GENERATED_API_KEY_NAME }),
+    throw: false,
+  });
+
+  const json = parseJsonResponse<unknown>(response, target, "/auth/api-keys", "ExcaliDash API key creation");
+  const apiKey = extractApiKey(json);
+  if (apiKey === null) {
+    throw new Error("ExcaliDash API key creation response did not include an API key.");
+  }
+
+  return apiKey;
+}
+
+async function loginWithPassword(target: ExcaliDashTarget): Promise<TemporarySession> {
+  const csrf = await getCsrfToken(target);
+  if (csrf.token.length === 0) {
+    throw new Error("CSRF token response did not include a token for login.");
+  }
+
+  const response = await requestUrl({
+    url: buildApiUrl(target, "/auth/login"),
+    method: "POST",
+    headers: {
+      Accept: "application/json",
+      "Content-Type": "application/json",
+      ...(csrf.cookieHeader.length > 0 ? { Cookie: csrf.cookieHeader } : {}),
+      [csrf.header]: csrf.token,
+    },
+    body: JSON.stringify({ username: target.username, password: target.password }),
+    throw: false,
+  });
+
+  parseJsonResponse<unknown>(response, target, "/auth/login", "ExcaliDash login");
+  const session = mergeSessionCookies({ cookieHeader: csrf.cookieHeader }, response);
+  if (session.cookieHeader.length === 0) {
+    throw new Error("ExcaliDash login did not return a session cookie.");
+  }
+
+  return session;
+}
+
+async function findExistingApiKey(target: ExcaliDashTarget, session: TemporarySession): Promise<string | null> {
+  const response = await requestUrl({
+    url: buildApiUrl(target, "/auth/api-keys"),
+    method: "GET",
+    headers: {
+      Accept: "application/json",
+      Cookie: session.cookieHeader,
+    },
+    throw: false,
+  });
+
+  const json = parseJsonResponse<unknown>(response, target, "/auth/api-keys", "ExcaliDash API key lookup");
+  return extractNamedApiKey(json, GENERATED_API_KEY_NAME);
+}
+
+async function getCsrfToken(target: ExcaliDashTarget, cookieHeader = ""): Promise<{ header: string; token: string; cookieHeader: string }> {
   if (target.staticCsrfToken.length > 0) {
-    return { header: target.csrfHeaderName, token: target.staticCsrfToken };
+    return { header: target.csrfHeaderName, token: target.staticCsrfToken, cookieHeader };
   }
 
   const headers: Record<string, string> = { Accept: "application/json" };
-  if (target.cookieHeader.length > 0) {
-    headers.Cookie = target.cookieHeader;
+  if (cookieHeader.length > 0) {
+    headers.Cookie = cookieHeader;
   }
 
   const response = await requestUrl({
@@ -716,10 +877,87 @@ async function getCsrfToken(target: ExcaliDashTarget): Promise<{ header: string;
   });
 
   const json = parseJsonResponse<Partial<{ token: string; header: string }>>(response, target, target.csrfTokenEndpoint, "CSRF token request");
+  const session = mergeSessionCookies({ cookieHeader }, response);
   return {
     header: typeof json.header === "string" && json.header.length > 0 ? json.header : target.csrfHeaderName,
     token: typeof json.token === "string" ? json.token : "",
+    cookieHeader: session.cookieHeader,
   };
+}
+
+function mergeSessionCookies(session: TemporarySession, response: RequestUrlResponse): TemporarySession {
+  const cookies = extractSetCookies(response.headers);
+  if (cookies.length === 0) {
+    return session;
+  }
+
+  const jar = new Map<string, string>();
+  for (const cookie of splitCookieHeader(session.cookieHeader)) {
+    const name = cookie.split("=", 1)[0]?.trim();
+    if (name !== undefined && name.length > 0) {
+      jar.set(name, cookie);
+    }
+  }
+
+  for (const cookie of cookies) {
+    const pair = cookie.split(";", 1)[0]?.trim() ?? "";
+    const name = pair.split("=", 1)[0]?.trim();
+    if (name.length > 0 && pair.length > 0) {
+      jar.set(name, pair);
+    }
+  }
+
+  return { cookieHeader: Array.from(jar.values()).join("; ") };
+}
+
+function extractSetCookies(headers: Record<string, string>): string[] {
+  for (const [key, value] of Object.entries(headers)) {
+    if (key.toLowerCase() === "set-cookie" && value.trim().length > 0) {
+      return value.split(/,(?=\s*[^;,\s]+=)/).map((item) => item.trim()).filter((item) => item.length > 0);
+    }
+  }
+
+  return [];
+}
+
+function splitCookieHeader(cookieHeader: string): string[] {
+  return cookieHeader.split(";").map((item) => item.trim()).filter((item) => item.length > 0);
+}
+
+function extractNamedApiKey(value: unknown, name: string): string | null {
+  const keys = Array.isArray(value) ? value : isRecord(value) && Array.isArray(value.apiKeys) ? value.apiKeys : [];
+  for (const key of keys) {
+    if (!isRecord(key)) {
+      continue;
+    }
+
+    const keyName = typeof key.name === "string" ? key.name : typeof key.label === "string" ? key.label : "";
+    if (keyName === name) {
+      return extractApiKey(key);
+    }
+  }
+
+  return null;
+}
+
+function extractApiKey(value: unknown): string | null {
+  if (!isRecord(value)) {
+    return typeof value === "string" && value.length > 0 ? value : null;
+  }
+
+  for (const field of ["apiKey", "key", "token", "value", "secret"] as const) {
+    const apiKey = value[field];
+    if (typeof apiKey === "string" && apiKey.length > 0) {
+      return apiKey;
+    }
+
+    const nestedApiKey = extractApiKey(apiKey);
+    if (nestedApiKey !== null) {
+      return nestedApiKey;
+    }
+  }
+
+  return null;
 }
 
 function parseJsonResponse<T>(
@@ -815,6 +1053,9 @@ function sanitizeErrorMessage(error: unknown): string {
   const message = error instanceof Error ? error.message : String(error);
   return message
     .replace(/(cookie\s*[:=]\s*)[^\n,;]+/gi, "$1[redacted]")
+    .replace(/(authorization\s*[:=]\s*bearer\s+)[^\n,;]+/gi, "$1[redacted]")
+    .replace(/(api[-_\s]*key\s*[:=]\s*)[^\n,;]+/gi, "$1[redacted]")
+    .replace(/(password\s*[:=]\s*)[^\n,;]+/gi, "$1[redacted]")
     .replace(/(csrf[-_\s]*(?:token)?\s*[:=]\s*)[^\n,;]+/gi, "$1[redacted]")
     .replace(/(x-csrf-token\s*[:=]\s*)[^\n,;]+/gi, "$1[redacted]");
 }
@@ -858,7 +1099,11 @@ function normalizeTarget(target: Partial<ExcaliDashTarget>): ExcaliDashTarget {
     csrfHeaderName: target.csrfHeaderName ?? DEFAULT_CSRF_HEADER,
     csrfTokenPlacement: "header",
     staticCsrfToken: target.staticCsrfToken ?? "",
-    cookieHeader: target.cookieHeader ?? "",
+    authMode: target.authMode === "username-password" ? "username-password" : "api-key",
+    apiKey: target.apiKey ?? "",
+    username: target.username ?? "",
+    password: target.password ?? "",
+    generatedApiKey: target.generatedApiKey ?? "",
   };
 }
 

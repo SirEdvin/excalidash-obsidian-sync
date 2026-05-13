@@ -4,7 +4,7 @@ Sync selected Obsidian Excalidraw notes to ExcaliDash by using frontmatter opt-i
 
 ## MVP behavior
 
-- Configure one or more ExcaliDash targets in plugin settings. Each target includes a **Test connection** button to verify its URL, auth cookie, and CSRF configuration.
+- Configure one or more ExcaliDash targets in plugin settings. Each target includes a **Test connection** button to verify its URL and bearer-token authentication.
 - Drawings are ignored unless their note frontmatter contains `excalidash-destination` matching a configured target name.
 - Drawings can optionally set `excalidash-collection` to an ExcaliDash collection id, name, or title. Blank or absent means no collection; the plugin never creates collections.
 - Default direction is Obsidian → ExcaliDash. Set `excalidash-sync: bidirectional` to allow remote changes to flow back when the local drawing has not changed since the last sync. The parser also accepts the legacy typo `bydirectional`.
@@ -48,6 +48,9 @@ excalidash-last-synced: 2026-05-13T12:00:00.000Z
 The plugin uses the internal routes documented in `docs/excalidash-api-notes.md`:
 
 - `GET /api/csrf-token`
+- `POST /api/auth/login`
+- `GET /api/auth/api-keys`
+- `POST /api/auth/api-keys`
 - `GET /api/drawings/:id`
 - `POST /api/drawings`
 - `PUT /api/drawings/:id`
@@ -57,9 +60,12 @@ For `https://exdh.siredvin.site`, configure the target as:
 
 - Base URL: `https://exdh.siredvin.site`
 - API path prefix: `/api`
-- CSRF token endpoint: `/csrf-token`
+- Auth mode: `API key`
+- API key: your ExcaliDash personal API key
 
-Write calls send the CSRF token in the configured header, defaulting to `x-csrf-token`. If your ExcaliDash instance requires auth cookies, place the cookie header in the target configuration.
+Normal drawing and collection sync requests send `Authorization: Bearer <apiKey>` and do not send cookies or CSRF tokens. Existing targets are migrated to API key mode with an empty API key; paste a personal API key before syncing.
+
+If you do not already have a personal API key, set the target auth mode to **Username and password**, enter your login credentials, and click **Generate API key from login**. The plugin logs in with a temporary cookie session, uses CSRF only for login/API-key management, stores the returned key as `generatedApiKey`, and then uses bearer auth for normal sync. The temporary login cookie is not stored and is not used for drawing or collection sync.
 
 ## Conflict behavior
 

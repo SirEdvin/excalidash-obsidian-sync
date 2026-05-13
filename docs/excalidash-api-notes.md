@@ -6,7 +6,7 @@
 
 ## TL;DR
 
-ExcaliDash appears to have a usable HTTP REST backend for drawings and collections, but it is best treated as an **internal, undocumented API**, not a stable public plugin API. A sync feature is feasible by using the drawing CRUD endpoints, but the design should account for auth cookies, CSRF tokens, optimistic version conflicts, and possible upstream route changes.
+ExcaliDash appears to have a usable HTTP REST backend for drawings and collections, but it is best treated as an **internal, undocumented API**, not a stable public plugin API. A sync feature is feasible by using the drawing CRUD endpoints, but the design should account for bearer-token auth, CSRF-protected login/key-management, optimistic version conflicts, and possible upstream route changes.
 
 Repository checked: <https://github.com/ZimengXiong/ExcaliDash>
 
@@ -133,7 +133,15 @@ For a first version, prefer explicit conflict reporting over silent overwrite.
 
 ## Auth and CSRF Notes
 
-ExcaliDash write endpoints are protected by CSRF middleware.
+The Obsidian plugin uses personal API keys for normal drawing and collection sync:
+
+```http
+Authorization: Bearer <api-key>
+```
+
+Bearer-authenticated sync requests do not send cookies and do not request or send CSRF tokens.
+
+Cookie sessions and CSRF are only used to generate or reuse a personal API key from username/password credentials.
 
 CSRF token route:
 
@@ -156,7 +164,7 @@ Login route:
 POST /auth/login
 ```
 
-The login route sets auth cookies. It does **not** appear to return the access token in the JSON response. The backend auth middleware can read either:
+The login route sets temporary auth cookies. It does **not** appear to return the access token in the JSON response. The backend auth middleware can read either:
 
 ```http
 Authorization: Bearer <access-token>
@@ -164,14 +172,21 @@ Authorization: Bearer <access-token>
 
 or the access-token cookie, but normal login is cookie-oriented.
 
-For mutating requests, the client usually needs:
+API key routes used after temporary login:
+
+```text
+GET /auth/api-keys
+POST /auth/api-keys
+```
+
+For login and API-key creation, the client usually needs:
 
 ```http
 Cookie: <ExcaliDash auth + CSRF client cookies>
 x-csrf-token: <token from /csrf-token>
 ```
 
-This makes direct Obsidian-plugin implementation possible but annoying, because the plugin must manage cookies and CSRF tokens correctly.
+The plugin extracts `Set-Cookie` only into an in-memory temporary session for login/key-management and stores only the resulting personal API key for future sync.
 
 ## Recommended Architecture Options
 
@@ -181,9 +196,9 @@ The Obsidian plugin talks directly to ExcaliDash.
 
 Responsibilities:
 
-- store ExcaliDash URL and credentials/token material,
-- login and retain cookies,
-- request CSRF tokens,
+- store ExcaliDash URL and API key material,
+- optionally login once with username/password to create a personal API key,
+- request CSRF tokens only for login/key-management,
 - parse `.excalidraw` / `.excalidraw.md` files,
 - upsert drawings,
 - handle version conflicts,
@@ -196,7 +211,7 @@ Pros:
 
 Cons:
 
-- cookie + CSRF handling inside Obsidian may be fiddly,
+- login + CSRF handling inside Obsidian may be fiddly,
 - credentials live in plugin settings,
 - less convenient for logging/debugging,
 - harder to reuse from other agents/tools.
