@@ -6,9 +6,10 @@ Sync selected Obsidian Excalidraw notes to ExcaliDash by using frontmatter opt-i
 
 - Configure one or more ExcaliDash targets in plugin settings. Each target includes a **Test connection** button to verify its URL, auth cookie, and CSRF configuration.
 - Drawings are ignored unless their note frontmatter contains `excalidash-destination` matching a configured target name.
+- Drawings can optionally set `excalidash-collection` to an ExcaliDash collection id, name, or title. Blank or absent means no collection; the plugin never creates collections.
 - Default direction is Obsidian → ExcaliDash. Set `excalidash-sync: bidirectional` to allow remote changes to flow back when the local drawing has not changed since the last sync. The parser also accepts the legacy typo `bydirectional`.
 - Use the **Perform sync** command to sync all eligible drawings.
-- Use **Edit current drawing settings** to edit sync frontmatter for the active drawing.
+- Use **Edit current drawing settings** to edit sync and collection frontmatter for the active drawing.
 - Supports plain `.excalidraw` JSON and `.excalidraw.md` notes with YAML frontmatter plus fenced, embedded, or `compressed-json` Excalidraw data for Obsidian-to-ExcaliDash upload/sync.
 
 ## Install with BRAT
@@ -34,6 +35,7 @@ BRAT will track updates from this repository. If a release is available, use the
 
 ```yaml
 excalidash-destination: home
+excalidash-collection: My collection # optional id, name, or title
 excalidash-sync: obsidian-to-excalidash # or bidirectional
 excalidash-id: generated-after-first-sync
 excalidash-version: 4
@@ -49,6 +51,7 @@ The plugin uses the internal routes documented in `docs/excalidash-api-notes.md`
 - `GET /api/drawings/:id`
 - `POST /api/drawings`
 - `PUT /api/drawings/:id`
+- `GET /api/collections`
 
 For `https://exdh.siredvin.site`, configure the target as:
 
@@ -61,6 +64,8 @@ Write calls send the CSRF token in the configured header, defaulting to `x-csrf-
 ## Conflict behavior
 
 - Existing remote drawings are fetched before update and written back with the latest remote version.
+- If `excalidash-collection` is set, the plugin fetches `/collections`, resolves id first and then exact name/title, and fails that drawing if no collection matches.
+- Collection changes are included in drawing create and update requests, so changing or clearing `excalidash-collection` can move an existing remote drawing.
 - A remote version change since the last sync is reported as a conflict for one-way sync.
 - Bidirectional sync pulls the remote scene into Obsidian only when the local scene hash still matches `excalidash-last-hash`.
 - If both local and remote changed, the plugin reports a conflict and leaves both copies untouched.

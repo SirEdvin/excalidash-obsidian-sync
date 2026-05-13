@@ -2,7 +2,7 @@
   "scripts": {
     "dev": "node esbuild.config.mjs --watch",
     "build": "tsc -noEmit -skipLibCheck && node esbuild.config.mjs production",
-    "test": "node scripts/verify-compressed-json.mjs",
+    "test": "node scripts/verify-compressed-json.mjs && node scripts/verify-collection-resolution.mjs",
     "version": "node version-bump.mjs && git add manifest.json versions.json"
   },
   "dependencies": {
@@ -19,7 +19,7 @@
     "typescript": "^5.7.3"
   },
   "name": "excalidash-sync",
-  "version": "0.1.3",
+  "version": "0.1.4",
   "description": "Sync Excalidraw drawings from vault frontmatter into ExcaliDash.",
   "main": "main.js",
   "license": "MIT",

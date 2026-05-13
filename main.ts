@@ -36,6 +36,7 @@ interface ExcaliDashSyncSettings {
 
 interface DrawingFrontmatter {
   destination?: string;
+  collection?: string;
   direction: SyncDirection;
   id?: string;
   version?: number;
@@ -55,6 +56,12 @@ interface ExcaliDashDrawing extends ExcalidrawScene {
   version: number;
   preview?: string | null;
   collectionId?: string | null;
+}
+
+interface ExcaliDashCollection {
+  id: string;
+  name?: string;
+  title?: string;
 }
 
 interface SyncResult {
@@ -151,9 +158,10 @@ export default class ExcaliDashSyncPlugin extends Plugin {
 
       const localHash = await sceneHash(parsed.scene);
       const localChanged = localHash !== frontmatter.lastHash;
+      const collectionId = await resolveDrawingCollectionId(target, frontmatter.collection);
 
       if (frontmatter.id === undefined) {
-        const created = await createRemoteDrawing(target, file.basename, parsed.scene);
+        const created = await createRemoteDrawing(target, file.basename, parsed.scene, collectionId);
         await this.updateSyncFrontmatter(file, created.id, created.version, localHash);
         return { path: file.path, status: "synced", message: `Created remote drawing ${created.id}.` };
       }
@@ -161,6 +169,7 @@ export default class ExcaliDashSyncPlugin extends Plugin {
       const remote = await getRemoteDrawing(target, frontmatter.id);
       const remoteHash = await sceneHash(remote);
       const remoteChanged = frontmatter.version !== undefined && remote.version !== frontmatter.version;
+      const collectionChanged = (remote.collectionId ?? null) !== collectionId;
 
       if (frontmatter.direction === "bidirectional" && remoteChanged && !localChanged) {
         await this.writeRemoteSceneToLocal(file, raw, parsed, remote);
@@ -176,11 +185,11 @@ export default class ExcaliDashSyncPlugin extends Plugin {
         };
       }
 
-      if (!localChanged) {
+      if (!localChanged && !collectionChanged) {
         return { path: file.path, status: "skipped", message: "No local changes." };
       }
 
-      const updated = await updateRemoteDrawing(target, frontmatter.id, file.basename, parsed.scene, remote.version);
+      const updated = await updateRemoteDrawing(target, frontmatter.id, file.basename, parsed.scene, remote.version, collectionId);
       await this.updateSyncFrontmatter(file, updated.id, updated.version, localHash);
       return { path: file.path, status: "synced", message: `Updated remote drawing to version ${updated.version}.` };
     } catch (error) {
@@ -371,6 +380,7 @@ class DrawingSettingsModal extends Modal {
   plugin: ExcaliDashSyncPlugin;
   file: TFile;
   destination = "";
+  collection = "";
   direction: SyncDirection = DEFAULT_SYNC_DIRECTION;
 
   constructor(app: App, plugin: ExcaliDashSyncPlugin, file: TFile) {
@@ -379,6 +389,7 @@ class DrawingSettingsModal extends Modal {
     this.file = file;
     const frontmatter = parseDrawingFrontmatter(app.metadataCache.getFileCache(file)?.frontmatter);
     this.destination = frontmatter.destination ?? "";
+    this.collection = frontmatter.collection ?? "";
     this.direction = frontmatter.direction;
   }
 
@@ -413,6 +424,16 @@ class DrawingSettingsModal extends Modal {
         }));
 
     new Setting(contentEl)
+      .setName("Collection")
+      .setDesc("Optional ExcaliDash collection id, name, or title. Leave blank for no collection.")
+      .addText((text) => text
+        .setPlaceholder("optional collection")
+        .setValue(this.collection)
+        .onChange((value) => {
+          this.collection = value.trim();
+        }));
+
+    new Setting(contentEl)
       .addButton((button) => button
         .setButtonText("Save")
         .setCta()
@@ -430,11 +451,17 @@ class DrawingSettingsModal extends Modal {
       if (this.destination.length === 0) {
         delete frontmatter["excalidash-destination"];
         delete frontmatter["excalidash-sync"];
+        delete frontmatter["excalidash-collection"];
         return;
       }
 
       frontmatter["excalidash-destination"] = this.destination;
       frontmatter["excalidash-sync"] = this.direction;
+      if (this.collection.length === 0) {
+        delete frontmatter["excalidash-collection"];
+      } else {
+        frontmatter["excalidash-collection"] = this.collection;
+      }
     });
   }
 }
@@ -561,12 +588,12 @@ async function sceneHash(scene: ExcalidrawScene): Promise<string> {
   return Array.from(new Uint8Array(digest)).map((byte) => byte.toString(16).padStart(2, "0")).join("");
 }
 
-async function createRemoteDrawing(target: ExcaliDashTarget, name: string, scene: ExcalidrawScene): Promise<ExcaliDashDrawing> {
+async function createRemoteDrawing(target: ExcaliDashTarget, name: string, scene: ExcalidrawScene, collectionId: string | null): Promise<ExcaliDashDrawing> {
   return requestJson<ExcaliDashDrawing>(target, "POST", "/drawings", {
     name,
     ...scene,
     preview: null,
-    collectionId: null,
+    collectionId,
   });
 }
 
@@ -580,13 +607,44 @@ async function updateRemoteDrawing(
   name: string,
   scene: ExcalidrawScene,
   version: number,
+  collectionId: string | null,
 ): Promise<ExcaliDashDrawing> {
   return requestJson<ExcaliDashDrawing>(target, "PUT", `/drawings/${encodeURIComponent(id)}`, {
     name,
     ...scene,
     preview: null,
     version,
+    collectionId,
   });
+}
+
+async function resolveDrawingCollectionId(target: ExcaliDashTarget, collection: string | undefined): Promise<string | null> {
+  if (collection === undefined) {
+    return null;
+  }
+
+  const collections = await requestJson<unknown>(target, "GET", "/collections");
+  const resolved = resolveCollectionId(collection, collections);
+  if (resolved === null) {
+    throw new Error(`ExcaliDash collection '${collection}' was not found by id, name, or title.`);
+  }
+
+  return resolved;
+}
+
+function resolveCollectionId(collection: string, value: unknown): string | null {
+  if (!Array.isArray(value)) {
+    throw new Error("ExcaliDash collections response was not a JSON array.");
+  }
+
+  const collections = value.filter(isExcaliDashCollection);
+  return collections.find((item) => item.id === collection)?.id
+    ?? collections.find((item) => item.name === collection || item.title === collection)?.id
+    ?? null;
+}
+
+function isExcaliDashCollection(value: unknown): value is ExcaliDashCollection {
+  return isRecord(value) && typeof value.id === "string";
 }
 
 async function testExcaliDashConnection(target: ExcaliDashTarget): Promise<ConnectionTestResult> {
@@ -768,6 +826,7 @@ function parseDrawingFrontmatter(frontmatter: Record<string, unknown> | undefine
 
   return {
     destination: readNonEmptyString(frontmatter?.["excalidash-destination"]),
+    collection: readNonEmptyString(frontmatter?.["excalidash-collection"]),
     direction,
     id: readNonEmptyString(frontmatter?.["excalidash-id"]),
     version: typeof version === "number" ? version : Number.isFinite(Number(version)) ? Number(version) : undefined,
