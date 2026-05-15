@@ -416,6 +416,7 @@ class ExcaliDashSettingTab extends PluginSettingTab {
             await this.plugin.saveSettings();
             try {
               target.generatedApiKey = await generateApiKeyFromLogin(target);
+              target.password = "";
               await this.plugin.saveSettings();
               this.display();
               new Notice(`ExcaliDash API key generated for ${formatTargetName(target, index)}.`);
@@ -423,16 +424,24 @@ class ExcaliDashSettingTab extends PluginSettingTab {
               new Notice(`ExcaliDash API key generation failed for ${formatTargetName(target, index)}: ${sanitizeErrorMessage(error)}`, 10000);
             }
           }));
-      }
 
-      actionSetting.addButton((button) => button
-          .setButtonText("Remove target")
-          .setWarning()
+        actionSetting.addButton((button) => button
+          .setButtonText("Clear generated API key")
           .onClick(async () => {
-            this.plugin.settings.targets.splice(index, 1);
+            target.generatedApiKey = "";
             await this.plugin.saveSettings();
             this.display();
           }));
+      }
+
+      actionSetting.addButton((button) => button
+        .setButtonText("Remove target")
+        .setWarning()
+        .onClick(async () => {
+          this.plugin.settings.targets.splice(index, 1);
+          await this.plugin.saveSettings();
+          this.display();
+        }));
     });
 
     new Setting(containerEl)
@@ -988,7 +997,7 @@ async function generateApiKeyFromLogin(target: ExcaliDashTarget): Promise<string
     throw new Error("Username and password are required to generate an API key.");
   }
 
-  let session = await loginWithPassword(target);
+  const session = await loginWithPassword(target);
   const existingKey = await findExistingApiKey(target, session);
   if (existingKey !== null) {
     return existingKey;
