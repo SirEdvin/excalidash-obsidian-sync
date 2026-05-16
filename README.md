@@ -1,5 +1,7 @@
 # ExcaliDash sync
 
+![vibe-coded](assets/badges/vibe-coded.svg)
+
 Sync the current Obsidian Excalidraw note to ExcaliDash by using frontmatter opt-in metadata.
 
 ## MVP behavior
