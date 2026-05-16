@@ -10,7 +10,7 @@ It supports multiple different [ExcaliDash](https://github.com/ZimengXiong/Excal
 
 1. Install plugin via obsidian community plugins
 2. Enable it
-3. Configure access to your [Excalidash](https://github.com/ZimengXiong/ExcaliDash) instance, using username/password or api keys.
+3. Configure access to your [Excalidash](https://github.com/ZimengXiong/ExcaliDash) instance, using username/password or api keys. Use the server root as the base URL; the plugin uses ExcaliDash's fixed `/api` routes internally.
 4. Use Excalidash Sync command to edit settings for one drawing or fall all drawings in specific folder.
 5. Hit manual sync command.
 

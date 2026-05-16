@@ -6,11 +6,13 @@
 
 ## TL;DR
 
-ExcaliDash appears to have a usable HTTP REST backend for drawings and collections, but it is best treated as an **internal, undocumented API**, not a stable public plugin API. A sync feature is feasible by using the drawing CRUD endpoints, but the design should account for bearer-token auth, CSRF-protected login/key-management, optimistic version conflicts, and possible upstream route changes.
+ExcaliDash appears to have a usable HTTP REST backend for drawings and collections under the fixed `/api` path, but it is best treated as an **internal, undocumented API**, not a stable public plugin API. A sync feature is feasible by using the drawing CRUD endpoints, but the design should account for bearer-token auth, CSRF-protected login/key-management, optimistic version conflicts, and possible upstream route changes.
 
 Repository checked: <https://github.com/ZimengXiong/ExcaliDash>
 
 ## Relevant ExcaliDash API Surface
+
+The plugin prepends `/api` internally for these routes; the paths below are shown relative to that fixed prefix.
 
 ### Drawings
 
