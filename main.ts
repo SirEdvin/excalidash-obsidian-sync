@@ -94,7 +94,7 @@ export default class ExcaliDashSyncPlugin extends Plugin {
 
     this.addCommand({
       id: "perform-sync",
-      name: "Perform sync",
+      name: "Sync current drawing",
       callback: () => {
         void this.performSync();
       },
@@ -138,30 +138,30 @@ export default class ExcaliDashSyncPlugin extends Plugin {
   }
 
   async performSync(): Promise<void> {
-    const files = this.app.vault.getFiles().filter(isExcalidrawFile);
-    const results: SyncResult[] = [];
-
-    for (const file of files) {
-      const cache = this.app.metadataCache.getFileCache(file);
-      const frontmatter = parseDrawingFrontmatter(cache?.frontmatter);
-      if (frontmatter.destination === undefined) {
-        continue;
-      }
-
-      const target = this.settings.targets.find((item) => item.name === frontmatter.destination);
-      if (target === undefined) {
-        results.push({
-          path: file.path,
-          status: "error",
-          message: `Missing ExcaliDash target '${frontmatter.destination}'.`,
-        });
-        continue;
-      }
-
-      results.push(await this.syncFile(file, target, frontmatter));
+    const file = this.app.workspace.getActiveFile();
+    if (file === null || !isExcalidrawFile(file)) {
+      new Notice("ExcaliDash sync: open an Excalidraw drawing to sync.");
+      return;
     }
 
-    this.showSyncSummary(results);
+    const cache = this.app.metadataCache.getFileCache(file);
+    const frontmatter = parseDrawingFrontmatter(cache?.frontmatter);
+    if (frontmatter.destination === undefined) {
+      new Notice("ExcaliDash sync: current drawing is not opted in.");
+      return;
+    }
+
+    const target = this.settings.targets.find((item) => item.name === frontmatter.destination);
+    if (target === undefined) {
+      this.showSyncSummary([{
+        path: file.path,
+        status: "error",
+        message: `Missing ExcaliDash target '${frontmatter.destination}'.`,
+      }]);
+      return;
+    }
+
+    this.showSyncSummary([await this.syncFile(file, target, frontmatter)]);
   }
 
   async syncFile(file: TFile, target: ExcaliDashTarget, frontmatter: DrawingFrontmatter): Promise<SyncResult> {
@@ -556,8 +556,7 @@ class FolderDrawingSettingsModal extends Modal {
     contentEl.empty();
     new Setting(contentEl).setName("Apply drawing settings to folder").setHeading();
 
-    const folders = this.app.vault.getAllLoadedFiles()
-      .filter((file): file is TFolder => file instanceof TFolder)
+    const folders = collectFolders(this.app.vault.getRoot())
       .sort((left, right) => left.path.localeCompare(right.path));
 
     new Setting(contentEl)
@@ -714,6 +713,18 @@ function collectExcalidrawFiles(folder: TFolder): TFile[] {
   }
 
   return files;
+}
+
+function collectFolders(folder: TFolder): TFolder[] {
+  const folders: TFolder[] = [folder];
+
+  for (const child of folder.children) {
+    if (child instanceof TFolder) {
+      folders.push(...collectFolders(child));
+    }
+  }
+
+  return folders;
 }
 
 function analyzeFolderDrawingSettings(app: App, folder: TFolder): DrawingSettingsUpdate {

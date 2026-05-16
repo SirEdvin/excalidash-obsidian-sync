@@ -1,6 +1,6 @@
 # ExcaliDash sync
 
-Sync selected Obsidian Excalidraw notes to ExcaliDash by using frontmatter opt-in metadata.
+Sync the current Obsidian Excalidraw note to ExcaliDash by using frontmatter opt-in metadata.
 
 ## MVP behavior
 
@@ -8,7 +8,7 @@ Sync selected Obsidian Excalidraw notes to ExcaliDash by using frontmatter opt-i
 - Drawings are ignored unless their note frontmatter contains `excalidash-destination` matching a configured target name.
 - Drawings can optionally set `excalidash-collection` to an ExcaliDash collection id, name, or title. Blank or absent means no collection; the plugin never creates collections.
 - Default direction is Obsidian → ExcaliDash. Set `excalidash-sync: bidirectional` to allow remote changes to flow back when the local drawing has not changed since the last sync. The parser also accepts the legacy typo `bydirectional`.
-- Use the **Perform sync** command to sync all eligible drawings.
+- Use the **Sync current drawing** command to sync the active opted-in drawing.
 - Use **Edit current drawing settings** to edit sync and collection frontmatter for the active drawing.
 - Supports plain `.excalidraw` JSON and `.excalidraw.md` notes with YAML frontmatter plus fenced, embedded, or `compressed-json` Excalidraw data for Obsidian-to-ExcaliDash upload/sync.
 
