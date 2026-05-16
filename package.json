@@ -19,7 +19,7 @@
     "typescript": "^5.7.3"
   },
   "name": "excalidash-sync",
-  "version": "0.1.10",
+  "version": "0.1.11",
   "description": "Sync Excalidraw drawings from vault frontmatter into ExcaliDash.",
   "main": "main.js",
   "license": "MIT",
