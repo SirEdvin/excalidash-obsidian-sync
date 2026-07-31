@@ -7,6 +7,7 @@ import {
     RequestUrlParam,
     RequestUrlResponse,
     Setting,
+    SettingDefinitionItem,
     TFile,
     TFolder,
     normalizePath as normalizeObsidianPath,
@@ -384,217 +385,233 @@ class ExcaliDashSettingTab extends PluginSettingTab {
         this.plugin = plugin;
     }
 
-    display(): void {
-        const { containerEl } = this;
-        containerEl.empty();
-        new Setting(containerEl)
-            .setName("ExcaliDash sync targets")
-            .setHeading();
-
-        this.plugin.settings.targets.forEach((target, index) => {
-            const heading =
-                target.name.trim().length > 0
-                    ? target.name
-                    : `Target ${index + 1}`;
-            new Setting(containerEl).setName(heading).setHeading();
-
-            new Setting(containerEl)
-                .setName("Name")
-                .setDesc(
-                    "Frontmatter destination value for this ExcaliDash instance.",
-                )
-                .addText((text) =>
-                    text
-                        .setPlaceholder("home")
-                        .setValue(target.name)
-                        .onChange(async (value) => {
-                            target.name = value.trim();
-                            await this.plugin.saveSettings();
-                        }),
-                );
-
-            new Setting(containerEl)
-                .setName("Base URL")
-                .setDesc(
-                    "ExcaliDash server URL, for example https://excalidash.example.com.",
-                )
-                .addText((text) =>
-                    text
-                        .setPlaceholder("https://excalidash.example.com")
-                        .setValue(target.baseUrl)
-                        .onChange(async (value) => {
-                            target.baseUrl = value.trim();
-                            await this.plugin.saveSettings();
-                        }),
-                );
-
-            new Setting(containerEl)
-                .setName("Auth mode")
-                .setDesc(
-                    "Use an existing personal API key, or generate one by logging in once.",
-                )
-                .addDropdown((dropdown) =>
-                    dropdown
-                        .addOption("api-key", "API key")
-                        .addOption("username-password", "Username and password")
-                        .setValue(target.authMode)
-                        .onChange(async (value) => {
-                            target.authMode =
-                                value === "username-password"
-                                    ? "username-password"
-                                    : "api-key";
-                            await this.plugin.saveSettings();
-                            this.display();
-                        }),
-                );
-
-            if (target.authMode === "api-key") {
-                new Setting(containerEl)
-                    .setName("API key")
-                    .setDesc(
-                        "Personal API key used as an Authorization bearer token for sync requests.",
-                    )
-                    .addText((text) => {
-                        text.inputEl.type = "password";
-                        text.setPlaceholder("excalidash API key")
-                            .setValue(target.apiKey)
-                            .onChange(async (value) => {
-                                target.apiKey = value.trim();
-                                await this.plugin.saveSettings();
-                            });
-                    });
-            } else {
-                new Setting(containerEl)
-                    .setName("Username")
-                    .setDesc(
-                        "Used only to generate or reuse a personal API key.",
-                    )
-                    .addText((text) =>
-                        text
-                            .setPlaceholder("username")
-                            .setValue(target.username)
-                            .onChange(async (value) => {
-                                target.username = value.trim();
-                                await this.plugin.saveSettings();
-                            }),
-                    );
-
-                new Setting(containerEl)
-                    .setName("Password")
-                    .setDesc(
-                        "Used only during API key generation; normal sync uses the generated API key.",
-                    )
-                    .addText((text) => {
-                        text.inputEl.type = "password";
-                        text.setPlaceholder("password")
-                            .setValue(target.password)
-                            .onChange(async (value) => {
-                                target.password = value;
-                                await this.plugin.saveSettings();
-                            });
-                    });
-
-                new Setting(containerEl)
-                    .setName("Generated API key")
-                    .setDesc(
-                        target.generatedApiKey.length > 0
-                            ? "A generated key is stored and will be used for sync."
-                            : "No generated API key is stored yet.",
-                    )
-                    .addText((text) => {
-                        text.inputEl.type = "password";
-                        text.inputEl.disabled = true;
-                        text.setValue(
-                            target.generatedApiKey.length > 0 ? "stored" : "",
-                        );
-                    });
-            }
-
-            const actionSetting = new Setting(containerEl).addButton((button) =>
-                button.setButtonText("Test connection").onClick(async () => {
-                    await this.plugin.saveSettings();
-                    if (target.baseUrl.trim().length === 0) {
-                        new Notice(
-                            `ExcaliDash connection test failed for ${formatTargetName(target, index)}: base URL is required.`,
-                        );
-                        return;
-                    }
-
-                    try {
-                        const result = await testExcaliDashConnection(target);
-                        const suffix =
-                            result.drawingCount === undefined
-                                ? ""
-                                : ` Found ${result.drawingCount} drawings.`;
-                        new Notice(
-                            `ExcaliDash connection test succeeded for ${formatTargetName(target, index)}.${suffix}`,
-                        );
-                    } catch (error) {
-                        new Notice(
-                            `ExcaliDash connection test failed for ${formatTargetName(target, index)}: ${sanitizeErrorMessage(error)}`,
-                            10000,
-                        );
-                    }
-                }),
-            );
-
-            if (target.authMode === "username-password") {
-                actionSetting.addButton((button) =>
-                    button
-                        .setButtonText("Generate API key from login")
-                        .onClick(async () => {
-                            await this.plugin.saveSettings();
-                            try {
-                                target.generatedApiKey =
-                                    await generateApiKeyFromLogin(target);
-                                target.password = "";
-                                await this.plugin.saveSettings();
-                                this.display();
-                                new Notice(
-                                    `ExcaliDash API key generated for ${formatTargetName(target, index)}.`,
-                                );
-                            } catch (error) {
-                                new Notice(
-                                    `ExcaliDash API key generation failed for ${formatTargetName(target, index)}: ${sanitizeErrorMessage(error)}`,
-                                    10000,
-                                );
-                            }
-                        }),
-                );
-
-                actionSetting.addButton((button) =>
-                    button
-                        .setButtonText("Clear generated API key")
-                        .onClick(async () => {
-                            target.generatedApiKey = "";
-                            await this.plugin.saveSettings();
-                            this.display();
-                        }),
-                );
-            }
-
-            actionSetting.addButton((button) =>
-                button
-                    .setButtonText("Remove target")
-                    .setWarning()
-                    .onClick(async () => {
-                        this.plugin.settings.targets.splice(index, 1);
+    getSettingDefinitions(): SettingDefinitionItem[] {
+        return [
+            {
+                type: "list",
+                emptyState: "No ExcaliDash targets configured yet.",
+                addItem: {
+                    name: "Add target",
+                    action: async () => {
+                        this.plugin.settings.targets.push(createDefaultTarget());
                         await this.plugin.saveSettings();
-                        this.display();
-                    }),
-            );
-        });
-
-        new Setting(containerEl).addButton((button) =>
-            button
-                .setButtonText("Add target")
-                .setCta()
-                .onClick(async () => {
-                    this.plugin.settings.targets.push(createDefaultTarget());
+                        this.update();
+                    },
+                },
+                onDelete: async (index) => {
+                    this.plugin.settings.targets.splice(index, 1);
                     await this.plugin.saveSettings();
-                    this.display();
-                }),
-        );
+                    this.update();
+                },
+                items: this.plugin.settings.targets.map((target, index) => ({
+                    type: "page",
+                    name:
+                        target.name.trim().length > 0
+                            ? `Target ${index + 1}: ${target.name.trim()}`
+                            : `Target ${index + 1}`,
+                    displayValue: target.baseUrl,
+                    items: [
+                        {
+                            name: "Name",
+                            desc: "Frontmatter destination value for this ExcaliDash instance.",
+                            control: {
+                                type: "text",
+                                key: `targets.${index}.name`,
+                                placeholder: "home",
+                            },
+                        },
+                        {
+                            name: "Base URL",
+                            desc: "ExcaliDash server URL, for example https://excalidash.example.com.",
+                            control: {
+                                type: "text",
+                                key: `targets.${index}.baseUrl`,
+                                placeholder: "https://excalidash.example.com",
+                            },
+                        },
+                        {
+                            name: "Auth mode",
+                            desc: "Use an existing personal API key, or generate one by logging in once.",
+                            control: {
+                                type: "dropdown",
+                                key: `targets.${index}.authMode`,
+                                options: {
+                                    "api-key": "API key",
+                                    "username-password":
+                                        "Username and password",
+                                },
+                            },
+                        },
+                        {
+                            name: "API key",
+                            desc: "Personal API key used as an Authorization bearer token for sync requests.",
+                            visible: () => target.authMode === "api-key",
+                            render: (setting) => {
+                                setting.addText((text) => {
+                                    text.inputEl.type = "password";
+                                    text.setPlaceholder("ExcaliDash API key")
+                                        .setValue(target.apiKey)
+                                        .onChange(async (value) => {
+                                            target.apiKey = value.trim();
+                                            await this.plugin.saveSettings();
+                                        });
+                                });
+                            },
+                        },
+                        {
+                            name: "Username",
+                            desc: "Used only to generate or reuse a personal API key.",
+                            visible: () =>
+                                target.authMode === "username-password",
+                            control: {
+                                type: "text",
+                                key: `targets.${index}.username`,
+                                placeholder: "username",
+                            },
+                        },
+                        {
+                            name: "Password",
+                            desc: "Used only during API key generation; normal sync uses the generated API key.",
+                            visible: () =>
+                                target.authMode === "username-password",
+                            render: (setting) => {
+                                setting.addText((text) => {
+                                    text.inputEl.type = "password";
+                                    text.setPlaceholder("password")
+                                        .setValue(target.password)
+                                        .onChange(async (value) => {
+                                            target.password = value;
+                                            await this.plugin.saveSettings();
+                                        });
+                                });
+                            },
+                        },
+                        {
+                            name: "Generated API key",
+                            desc:
+                                target.generatedApiKey.length > 0
+                                    ? "A generated key is stored and will be used for sync."
+                                    : "No generated API key is stored yet.",
+                            visible: () =>
+                                target.authMode === "username-password",
+                        },
+                        {
+                            name: "Connection actions",
+                            render: (setting) => {
+                                setting.addButton((button) =>
+                                    button
+                                        .setButtonText("Test connection")
+                                        .onClick(async () => {
+                                            const targetIndex =
+                                                this.plugin.settings.targets.indexOf(
+                                                    target,
+                                                );
+                                            if (
+                                                target.baseUrl.trim().length ===
+                                                0
+                                            ) {
+                                                new Notice(
+                                                    `ExcaliDash connection test failed for ${formatTargetName(target, targetIndex)}: base URL is required.`,
+                                                );
+                                                return;
+                                            }
+
+                                            try {
+                                                const result =
+                                                    await testExcaliDashConnection(
+                                                        target,
+                                                    );
+                                                const suffix =
+                                                    result.drawingCount ===
+                                                    undefined
+                                                        ? ""
+                                                        : ` Found ${result.drawingCount} drawings.`;
+                                                new Notice(
+                                                    `ExcaliDash connection test succeeded for ${formatTargetName(target, targetIndex)}.${suffix}`,
+                                                );
+                                            } catch (error) {
+                                                new Notice(
+                                                    `ExcaliDash connection test failed for ${formatTargetName(target, targetIndex)}: ${sanitizeErrorMessage(error)}`,
+                                                    10000,
+                                                );
+                                            }
+                                        }),
+                                );
+
+                                if (
+                                    target.authMode === "username-password"
+                                ) {
+                                    setting.addButton((button) =>
+                                        button
+                                            .setButtonText(
+                                                "Generate API key from login",
+                                            )
+                                            .onClick(async () => {
+                                                try {
+                                                    target.generatedApiKey =
+                                                        await generateApiKeyFromLogin(
+                                                            target,
+                                                        );
+                                                    target.password = "";
+                                                    await this.plugin.saveSettings();
+                                                    this.update();
+                                                    new Notice(
+                                                        `ExcaliDash API key generated for ${formatTargetName(target, this.plugin.settings.targets.indexOf(target))}.`,
+                                                    );
+                                                } catch (error) {
+                                                    new Notice(
+                                                        `ExcaliDash API key generation failed for ${formatTargetName(target, this.plugin.settings.targets.indexOf(target))}: ${sanitizeErrorMessage(error)}`,
+                                                        10000,
+                                                    );
+                                                }
+                                            }),
+                                    );
+                                    setting.addButton((button) =>
+                                        button
+                                            .setButtonText(
+                                                "Clear generated API key",
+                                            )
+                                            .onClick(async () => {
+                                                target.generatedApiKey = "";
+                                                await this.plugin.saveSettings();
+                                                this.update();
+                                            }),
+                                    );
+                                }
+                            },
+                        },
+                    ],
+                })),
+            },
+        ];
+    }
+
+    getControlValue(key: string): unknown {
+        const [, index, field] = key.split(".");
+        return this.plugin.settings.targets[Number(index)]?.[
+            field as keyof ExcaliDashTarget
+        ];
+    }
+
+    async setControlValue(key: string, value: unknown): Promise<void> {
+        const [, index, field] = key.split(".");
+        const target = this.plugin.settings.targets[Number(index)];
+        if (target === undefined || !(field in target)) {
+            throw new Error(`Unknown ExcaliDash setting '${key}'.`);
+        }
+
+        const normalized = String(value).trim();
+        if (field === "authMode") {
+            target.authMode =
+                normalized === "username-password"
+                    ? "username-password"
+                    : "api-key";
+        } else {
+            target[
+                field as Exclude<keyof ExcaliDashTarget, "authMode">
+            ] = normalized;
+        }
+        await this.plugin.saveSettings();
     }
 }
 
